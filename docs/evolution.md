@@ -1,4 +1,4 @@
-# Evolution: From Voice Notepad V3 to AI Typer V2
+# Evolution: From Voice Notepad V3 to Voxtype
 
 ## The Core Insight That Started It All
 
@@ -51,7 +51,7 @@ All useful individually, but collectively the app had become heavy and intimidat
 
 ## The V2 Reset
 
-AI Typer V2 keeps everything that was proven valuable and drops everything that added complexity without proportional benefit.
+Voxtype keeps everything that was proven valuable and drops everything that added complexity without proportional benefit.
 
 ### What Changed
 

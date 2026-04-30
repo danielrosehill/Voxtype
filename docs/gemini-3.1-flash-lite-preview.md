@@ -219,7 +219,7 @@ print(response.text)
 
 ---
 
-## Notes for AI Typer V2
+## Notes for Voxtype
 
 - **Audio input is supported** — can send audio directly for transcription
 - **Inline audio**: Use `types.Part.from_bytes(data=audio_bytes, mime_type='audio/wav')` for inline audio (no file upload needed)

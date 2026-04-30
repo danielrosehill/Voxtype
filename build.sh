@@ -1,12 +1,12 @@
 #!/bin/bash
-# Build AI Typer V2 packages
+# Build Voxtype packages
 # Usage: ./build.sh [--deb|--dev|--help]
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 show_help() {
-    echo "AI Typer V2 Build System"
+    echo "Voxtype Build System"
     echo ""
     echo "Usage: ./build.sh [COMMAND]"
     echo ""
@@ -35,11 +35,18 @@ build_deb() {
     mkdir -p "$BUILD_DIR/DEBIAN"
     mkdir -p "$BUILD_DIR/opt/${PKG_NAME}"
     mkdir -p "$BUILD_DIR/usr/share/applications"
+    mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps"
     mkdir -p "$BUILD_DIR/usr/local/bin"
 
     # Copy app
     cp -r "$SCRIPT_DIR/app" "$BUILD_DIR/opt/${PKG_NAME}/"
     cp "$SCRIPT_DIR/run.sh" "$BUILD_DIR/opt/${PKG_NAME}/"
+
+    # Icon (hicolor)
+    if [ -f "$SCRIPT_DIR/app/assets/icon.png" ]; then
+        cp "$SCRIPT_DIR/app/assets/icon.png" \
+           "$BUILD_DIR/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png"
+    fi
 
     # Create venv — prefer python3.12 (has dev headers), fallback to system python3
     cd "$BUILD_DIR/opt/${PKG_NAME}/app"
@@ -70,9 +77,11 @@ LAUNCHER
     # Desktop entry
     cat > "$BUILD_DIR/usr/share/applications/${PKG_NAME}.desktop" << EOF
 [Desktop Entry]
-Name=Multimodal Voice Typer
+Name=Voxtype
+GenericName=Voice Typer
 Comment=Voice dictation with multimodal AI cleanup
 Exec=${PKG_NAME}
+Icon=${PKG_NAME}
 Terminal=false
 Type=Application
 Categories=Utility;Audio;

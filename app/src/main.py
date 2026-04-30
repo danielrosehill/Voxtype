@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Multimodal Voice Typer — Voice dictation with multimodal AI cleanup.
+"""Voxtype — Voice dictation with multimodal AI cleanup.
 
 Single-window UI: record, transcribe, done. Format detection is automatic.
 """
@@ -386,9 +386,16 @@ class SettingsDialog(QDialog):
         self.out_clipboard.setChecked(config.output_to_clipboard)
         self.out_inject = QCheckBox("Type at cursor (ydotool)")
         self.out_inject.setChecked(config.output_to_inject)
+        self.out_auto_enter = QCheckBox("Press Enter after paste (chat apps)")
+        self.out_auto_enter.setChecked(config.auto_press_enter_after_paste)
+        self.out_auto_enter.setToolTip(
+            "After pasting at cursor, send an Enter keystroke. Useful for "
+            "Claude Code, Slack, etc."
+        )
         gl.addRow("Output:", self.out_app)
         gl.addRow("", self.out_clipboard)
         gl.addRow("", self.out_inject)
+        gl.addRow("", self.out_auto_enter)
 
         tabs.addTab(general, "General")
 
@@ -458,6 +465,7 @@ class SettingsDialog(QDialog):
         self.hotkey_toggle_combo = QComboBox()
         self.hotkey_tap_combo = QComboBox()
         self.hotkey_transcribe_combo = QComboBox()
+        self.hotkey_send_transcribe_combo = QComboBox()
         self.hotkey_clear_combo = QComboBox()
         self.hotkey_append_combo = QComboBox()
         self.hotkey_pause_combo = QComboBox()
@@ -472,6 +480,7 @@ class SettingsDialog(QDialog):
             (self.hotkey_toggle_combo, config.hotkey_toggle, "Toggle (start/stop):"),
             (self.hotkey_tap_combo, config.hotkey_tap_toggle, "Tap toggle (cache):"),
             (self.hotkey_transcribe_combo, config.hotkey_transcribe, "Transcribe cached:"),
+            (self.hotkey_send_transcribe_combo, config.hotkey_send_transcribe, "Send transcribe (paste + Enter):"),
             (self.hotkey_clear_combo, config.hotkey_clear, "Clear:"),
             (self.hotkey_append_combo, config.hotkey_append, "Append:"),
             (self.hotkey_pause_combo, config.hotkey_pause, "Pause/Resume:"),
@@ -687,10 +696,12 @@ class SettingsDialog(QDialog):
         self.config.output_to_app = self.out_app.isChecked()
         self.config.output_to_clipboard = self.out_clipboard.isChecked()
         self.config.output_to_inject = self.out_inject.isChecked()
+        self.config.auto_press_enter_after_paste = self.out_auto_enter.isChecked()
         self.config.audio_feedback_mode = self.feedback_combo.currentData()
         self.config.hotkey_toggle = self.hotkey_toggle_combo.currentData()
         self.config.hotkey_tap_toggle = self.hotkey_tap_combo.currentData()
         self.config.hotkey_transcribe = self.hotkey_transcribe_combo.currentData()
+        self.config.hotkey_send_transcribe = self.hotkey_send_transcribe_combo.currentData()
         self.config.hotkey_clear = self.hotkey_clear_combo.currentData()
         self.config.hotkey_append = self.hotkey_append_combo.currentData()
         self.config.hotkey_pause = self.hotkey_pause_combo.currentData()
@@ -897,6 +908,7 @@ class MainWindow(QMainWindow):
     _clear_signal = pyqtSignal()
     _tap_toggle_signal = pyqtSignal()
     _transcribe_signal = pyqtSignal()
+    _send_transcribe_signal = pyqtSignal()
     _append_signal = pyqtSignal()
     _pause_signal = pyqtSignal()
     _retake_signal = pyqtSignal()
@@ -942,6 +954,11 @@ class MainWindow(QMainWindow):
         self._last_inserted_text: str = ""
         self._text_before_last_insert: str = ""
 
+        # One-shot flag: when True, the next transcription delivery pastes at
+        # cursor and presses Enter regardless of the configured output modes.
+        # Set by the send_transcribe hotkey, cleared after delivery.
+        self._force_send_next: bool = False
+
         # Session stats (reset at local midnight)
         from datetime import date
         self._stats_day: date = date.today()
@@ -977,7 +994,7 @@ class MainWindow(QMainWindow):
             )
 
     def _setup_ui(self):
-        self.setWindowTitle("Multimodal Voice Typer")
+        self.setWindowTitle("Voxtype")
         self.resize(self.config.window_width, self.config.window_height)
 
         central = QWidget()
@@ -1088,6 +1105,8 @@ class MainWindow(QMainWindow):
         )
         self.text_edit.setFont(QFont("Sans Serif", 12))
         self.text_edit.setAcceptRichText(False)
+        self.text_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.text_edit.customContextMenuRequested.connect(self._on_text_context_menu)
         splitter.addWidget(self.text_edit)
 
         # History panel (right, collapsible accordion)
@@ -1303,6 +1322,17 @@ class MainWindow(QMainWindow):
         )
         self.inject_check.toggled.connect(self._on_inject_toggled)
         output_bar.addWidget(self.inject_check)
+
+        # Press Enter after paste — for chat apps where you want the message
+        # sent in one shot. Off by default so plain editors stay clean.
+        self.auto_enter_check = QCheckBox("⏎  Press Enter after paste")
+        self.auto_enter_check.setChecked(self.config.auto_press_enter_after_paste)
+        self.auto_enter_check.setToolTip(
+            "After pasting, send an Enter keystroke. Useful for Claude Code, "
+            "Slack, and other chat apps. Off by default."
+        )
+        self.auto_enter_check.toggled.connect(self._on_auto_enter_toggled)
+        output_bar.addWidget(self.auto_enter_check)
 
         # Append signature toggle — adds the configured signature after a
         # blank line at the end of each transcription. Off by default so
@@ -1589,7 +1619,7 @@ class MainWindow(QMainWindow):
         tray_menu.addAction("Quit", self.close)
         self.tray.setContextMenu(tray_menu)
         self.tray.activated.connect(self._on_tray_activated)
-        self.tray.setToolTip("Multimodal Voice Typer — Ready")
+        self.tray.setToolTip("Voxtype — Ready")
         self.tray.show()
 
     def _update_tray_state(self, state: str):
@@ -1597,25 +1627,25 @@ class MainWindow(QMainWindow):
         self._tray_state = state
         if state == "idle":
             self.tray.setIcon(self._tray_icon_idle)
-            self.tray.setToolTip("Multimodal Voice Typer — Ready")
+            self.tray.setToolTip("Voxtype — Ready")
             self._tray_record_action.setText("Record")
         elif state == "recording":
             self.tray.setIcon(self._tray_icon_recording)
-            self.tray.setToolTip("Multimodal Voice Typer — Recording...")
+            self.tray.setToolTip("Voxtype — Recording...")
             self._tray_record_action.setText("Stop + Transcribe")
         elif state == "transcribing":
             self.tray.setIcon(self._tray_icon_transcribing)
-            self.tray.setToolTip("Multimodal Voice Typer — Transcribing...")
+            self.tray.setToolTip("Voxtype — Transcribing...")
         elif state == "complete":
             self.tray.setIcon(self._tray_icon_complete)
-            self.tray.setToolTip("Multimodal Voice Typer — Done")
+            self.tray.setToolTip("Voxtype — Done")
             # Revert to idle after 3 seconds
             QTimer.singleShot(3000, lambda: self._update_tray_state("idle")
                               if self._tray_state == "complete" else None)
         elif state == "cached":
             self.tray.setIcon(self._tray_icon_idle)
             n = len(self._cached_segments)
-            self.tray.setToolTip(f"Multimodal Voice Typer — {n} segment{'s' if n != 1 else ''} cached")
+            self.tray.setToolTip(f"Voxtype — {n} segment{'s' if n != 1 else ''} cached")
             self._tray_record_action.setText("Record")
         self._tray_transcribe_action.setEnabled(bool(self._cached_segments))
 
@@ -1667,6 +1697,7 @@ class MainWindow(QMainWindow):
         self._clear_signal.connect(self._clear_recording)
         self._tap_toggle_signal.connect(self._tap_toggle)
         self._transcribe_signal.connect(self._transcribe_cached)
+        self._send_transcribe_signal.connect(self._send_transcribe)
         self._append_signal.connect(self._start_append)
         self._pause_signal.connect(self._pause_resume)
         self._retake_signal.connect(self._retake)
@@ -1698,6 +1729,9 @@ class MainWindow(QMainWindow):
         if hk.hotkey_transcribe:
             self.hotkey_listener.register("transcribe", hk.hotkey_transcribe,
                                           lambda: self._transcribe_signal.emit())
+        if hk.hotkey_send_transcribe:
+            self.hotkey_listener.register("send_transcribe", hk.hotkey_send_transcribe,
+                                          lambda: self._send_transcribe_signal.emit())
         if hk.hotkey_clear:
             self.hotkey_listener.register("clear", hk.hotkey_clear,
                                           lambda: self._clear_signal.emit())
@@ -1891,6 +1925,20 @@ class MainWindow(QMainWindow):
         self._update_segment_indicator()
         self._transcribe(audio_data)
 
+    def _send_transcribe(self):
+        """Hotkey: transcribe (stopping recording first if active), then paste
+        + Enter regardless of the configured output modes. The force-send flag
+        is consumed by the delivery path in _transcribe_cached's downstream."""
+        self._force_send_next = True
+        if self.recorder.is_recording:
+            self._stop_and_transcribe()
+        elif self._cached_segments:
+            self._transcribe_cached()
+        else:
+            # Nothing to send — clear the flag so a future paste isn't surprised.
+            self._force_send_next = False
+            self.status_label.setText("Send-transcribe: nothing recorded")
+
     def _start_append(self):
         """Start a new recording segment to append to cache."""
         self._start_append_recording()
@@ -2082,7 +2130,12 @@ class MainWindow(QMainWindow):
         if self.config.output_to_clipboard:
             copy_to_clipboard(output_text)
 
-        if self.config.output_to_inject:
+        force_send = self._force_send_next
+        self._force_send_next = False
+        if force_send:
+            # send_transcribe hotkey: paste + Enter regardless of inject setting.
+            self._inject_text(output_text, force_enter=True)
+        elif self.config.output_to_inject:
             self._inject_text(output_text)
 
         # Single "ready" cue — played once after delivery, regardless of
@@ -2179,7 +2232,7 @@ class MainWindow(QMainWindow):
             return "ctrl+shift+v"
         return "ctrl+v"
 
-    def _inject_text(self, text: str):
+    def _inject_text(self, text: str, force_enter: bool = False):
         """Paste text at cursor position via clipboard + synthetic paste key.
 
         Works across both Wayland-native (Kate) and XWayland (Konsole) apps:
@@ -2219,6 +2272,16 @@ class MainWindow(QMainWindow):
                 timeout=5, capture_output=True,
             )
 
+            if force_enter or self.config.auto_press_enter_after_paste:
+                # Brief gap so the paste lands before Enter; otherwise some
+                # apps swallow the newline as part of the paste event.
+                time.sleep(0.05)
+                # ydotool key codes: 28 = KEY_ENTER. ":1" = press, ":0" = release.
+                subprocess.run(
+                    ["ydotool", "key", "28:1", "28:0"],
+                    timeout=5, capture_output=True,
+                )
+
             # Restore previous clipboard after paste completes
             if old_clip is not None:
                 def _restore():
@@ -2253,6 +2316,71 @@ class MainWindow(QMainWindow):
         self.append_btn.setVisible(False)
         self.status_label.setText("Cleared")
 
+    def _on_text_context_menu(self, pos):
+        menu = self.text_edit.createStandardContextMenu()
+        cursor = self.text_edit.textCursor()
+        if not cursor.hasSelection():
+            # Auto-select the word under the cursor at the click position
+            click_cursor = self.text_edit.cursorForPosition(pos)
+            click_cursor.select(click_cursor.SelectionType.WordUnderCursor)
+            selected = click_cursor.selectedText().strip()
+        else:
+            selected = cursor.selectedText().strip()
+
+        if selected:
+            menu.addSeparator()
+            action = menu.addAction(f'Save "{selected[:40]}" as mistranscription…')
+            action.triggered.connect(lambda: self._save_as_mistranscription(selected))
+
+        menu.exec(self.text_edit.mapToGlobal(pos))
+
+    def _save_as_mistranscription(self, wrong: str):
+        from PyQt6.QtWidgets import QInputDialog
+        correct, ok = QInputDialog.getText(
+            self,
+            "Save as mistranscription",
+            f'Replace "{wrong}" with:',
+            text=wrong,
+        )
+        if not ok:
+            return
+        correct = correct.strip()
+        if not correct or correct == wrong:
+            return
+
+        entries = load_dict_entries()
+        # Update existing entry with same `from` (case-insensitive), or append.
+        replaced = False
+        for e in entries:
+            if e.get("from", "").lower() == wrong.lower():
+                e["to"] = correct
+                replaced = True
+                break
+        if not replaced:
+            entries.append({
+                "from": wrong,
+                "to": correct,
+                "whole_word": True,
+                "case_sensitive": False,
+            })
+        try:
+            save_dict_entries(entries)
+        except Exception as e:
+            QMessageBox.warning(self, "Save failed", f"Could not save dictionary:\n{e}")
+            return
+
+        # Apply the substitution to the current text immediately.
+        current = self.text_edit.toPlainText()
+        updated = apply_substitutions(current, [entries[-1] if not replaced else
+                                                next(x for x in entries if x["from"].lower() == wrong.lower())])
+        if updated != current:
+            self.text_edit.setPlainText(updated)
+            self._raw_text = updated
+
+        self.status_label.setText(
+            f'Saved: "{wrong}" → "{correct}"' + (" (updated)" if replaced else "")
+        )
+
     def _on_format_changed(self):
         self.config.format_preset = self.format_combo.currentData()
         save_config(self.config)
@@ -2267,6 +2395,10 @@ class MainWindow(QMainWindow):
 
     def _on_inject_toggled(self, checked: bool):
         self.config.output_to_inject = checked
+        save_config(self.config)
+
+    def _on_auto_enter_toggled(self, checked: bool):
+        self.config.auto_press_enter_after_paste = checked
         save_config(self.config)
 
     def _on_app_toggled(self, checked: bool):
@@ -2370,7 +2502,7 @@ class MainWindow(QMainWindow):
 
         body = QLabel(
             "<h3>How this app uses models</h3>"
-            "<p>Multimodal Voice Typer does <b>single-pass</b> transcription: "
+            "<p>Voxtype does <b>single-pass</b> transcription: "
             "audio goes to the model along with a cleanup prompt, and the "
             "model is expected to transcribe and format in one call. Only "
             "models that reliably handle this pattern are recommended.</p>"
@@ -2419,8 +2551,8 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self,
-            "About Multimodal Voice Typer",
-            f"<h3>Multimodal Voice Typer</h3>"
+            "About Voxtype",
+            f"<h3>Voxtype</h3>"
             f"<p>Version {APP_VERSION}</p>"
             f"<p><i>Multimodal AI transcription and reformatting with OpenRouter API</i></p>"
             f"<p>Voice dictation powered by multimodal AI models. "
@@ -2442,6 +2574,7 @@ class MainWindow(QMainWindow):
                 (self.vad_check_main, self.config.vad_enabled),
                 (self.show_meter_check, self.config.show_level_meter),
                 (self.sig_check, self.config.output_append_signature),
+                (self.auto_enter_check, self.config.auto_press_enter_after_paste),
             ):
                 cb.blockSignals(True)
                 cb.setChecked(val)
@@ -2556,7 +2689,7 @@ class MainWindow(QMainWindow):
         msg.setWindowTitle("API Key Required")
         msg.setText(
             "No OpenRouter API key found.\n\n"
-            "You need an API key from openrouter.ai to use Multimodal Voice Typer.\n"
+            "You need an API key from openrouter.ai to use Voxtype.\n"
             "Open Settings to configure it."
         )
         msg.addButton("Open Settings", QMessageBox.ButtonRole.AcceptRole)
@@ -2580,7 +2713,17 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Multimodal Voice Typer")
+    app.setApplicationName("Voxtype")
+    app.setDesktopFileName("ai-typer-v2")
+
+    # App icon — prefer system-installed hicolor icon, fall back to bundled asset
+    icon = QIcon.fromTheme("ai-typer-v2")
+    if icon.isNull():
+        bundled = Path(__file__).parent.parent / "assets" / "icon.png"
+        if bundled.exists():
+            icon = QIcon(str(bundled))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     window = MainWindow()
     window.show()

@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.5.7"
+APP_VERSION = "0.6.0"
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -524,6 +524,10 @@ class Config:
     output_to_clipboard: bool = True
     output_to_inject: bool = False
     output_append_signature: bool = False
+    # Press Enter after pasting at cursor — useful for chat apps (Claude Code,
+    # Slack) where you want to send the message in one shot. Off by default so
+    # plain editors don't get a stray newline.
+    auto_press_enter_after_paste: bool = False
 
     # Translation (empty = off, language code = translate to that language)
     translation_target: str = ""
@@ -535,6 +539,7 @@ class Config:
     hotkey_toggle: str = "f13"         # Start/stop+transcribe
     hotkey_tap_toggle: str = "f16"     # Start/stop+cache (append workflow)
     hotkey_transcribe: str = "f17"     # Transcribe cached audio
+    hotkey_send_transcribe: str = ""   # Transcribe + paste + Enter (one shot)
     hotkey_clear: str = "f18"          # Clear recording and cache
     hotkey_append: str = "f19"         # Append: start recording to add to cache
     hotkey_pause: str = "f20"          # Pause/resume

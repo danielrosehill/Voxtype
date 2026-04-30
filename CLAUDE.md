@@ -1,8 +1,8 @@
-# CLAUDE.md - AI Typer V2
+# CLAUDE.md - Voxtype
 
 ## Project Overview
 
-AI Typer V2 is a simplified PyQt6 desktop application for voice dictation with AI-powered transcription cleanup. It sends audio directly to multimodal AI models (Gemini via OpenRouter) along with a cleanup prompt — the model handles both transcription and text cleanup in a single pass.
+Voxtype is a simplified PyQt6 desktop application for voice dictation with AI-powered transcription cleanup. It sends audio directly to multimodal AI models (Gemini via OpenRouter) along with a cleanup prompt — the model handles both transcription and text cleanup in a single pass.
 
 This is a fresh start based on the learnings from AI-Transcription-Notepad (Voice Notepad V3), keeping the proven audio pipeline and transcription engine while dramatically simplifying the UI and configuration.
 

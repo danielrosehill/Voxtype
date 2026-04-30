@@ -1,4 +1,4 @@
-# AI Typer V2
+# Voxtype
 
 Voice dictation with multimodal AI cleanup. Speak naturally, get polished text.
 
@@ -115,7 +115,7 @@ Full sweep across 4 dictation samples × 5 MP3 bitrates × 12 models (240 API ca
 
 ### Model catalog
 
-AI Typer V2 works with any OpenRouter model that accepts audio input and produces text output. Models exposed in the settings UI are curated from OpenRouter's audio-input catalog — see [docs/openrouter-audio-models.md](docs/openrouter-audio-models.md) for the full snapshot and selection rationale. Current picks:
+Voxtype works with any OpenRouter model that accepts audio input and produces text output. Models exposed in the settings UI are curated from OpenRouter's audio-input catalog — see [docs/openrouter-audio-models.md](docs/openrouter-audio-models.md) for the full snapshot and selection rationale. Current picks:
 
 **Budget tier**
 - `google/gemini-2.0-flash-lite-001` — cheapest ($0.075/M in)

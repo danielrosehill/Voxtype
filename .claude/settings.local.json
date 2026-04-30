@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf ~/.claude/plugins/cache/danielrosehill/development-tasks)",
+      "Read(//home/daniel/.claude/plugins/cache/danielrosehill/**)"
+    ]
+  }
+}
