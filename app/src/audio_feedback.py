@@ -8,6 +8,7 @@ import math
 import random
 import struct
 import threading
+import time
 import wave
 from pathlib import Path
 from typing import Optional
@@ -228,6 +229,14 @@ def generate_double_ready_beep(volume: float = 0.22) -> bytes:
     return beep + gap + beep
 
 
+def generate_sent_beep(volume: float = 0.20) -> bytes:
+    """Single lower-pitched beep — 'audio sent for transcription'.
+
+    Distinct from start (mid 880Hz single) and ready (high 1175Hz double):
+    one short low tone says 'off it goes', so the return ding is unmistakable."""
+    return generate_clean_beep(frequency=520, duration_ms=70, volume=volume)
+
+
 class AudioFeedback:
     """Manages audio feedback sounds."""
 
@@ -238,8 +247,9 @@ class AudioFeedback:
         # two clearly distinct points of feedback, not a whole soundscape.
         self._start_beep = generate_single_start_beep()
         self._ready_beep = generate_double_ready_beep()
-        # Legacy aliases for events that still call through this class.
-        self._stop_beep = self._ready_beep
+        # Stop/sent: single low beep — clearly distinct from the high double
+        # 'ready' beep so you can tell 'sent' vs 'returned' by ear.
+        self._stop_beep = generate_sent_beep()
         self._clipboard_beep = self._ready_beep
         self._toggle_on_beep = generate_rising_chirp()
         self._toggle_off_beep = generate_falling_chirp()
@@ -316,6 +326,15 @@ class AudioFeedback:
                     format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE, output=True
                 )
                 stream.write(audio_data)
+                # stream.write() returns when bytes are queued, not when
+                # PortAudio's output buffer has drained — closing immediately
+                # truncates the tail. Wait out the reported output latency
+                # (with a small margin) before stopping.
+                try:
+                    latency = float(stream.get_output_latency())
+                except Exception:
+                    latency = 0.2
+                time.sleep(min(max(latency, 0.05), 0.5) + 0.05)
                 stream.stop_stream()
                 stream.close()
                 return

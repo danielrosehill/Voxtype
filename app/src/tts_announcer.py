@@ -1,7 +1,15 @@
 """TTS voice announcements for recording/transcription events.
 
 Plays pre-generated WAV files from assets/tts/ for status changes.
-Uses a single voice (Ryan — Edge TTS British male).
+
+Voice packs:
+  - default (top-level assets/tts/*.wav): Ryan, Edge TTS en-GB
+  - voices/corn/*.wav, voices/herman/*.wav: Chatterbox renders of the
+    My-Weird-Prompts characters
+
+The active voice pack is chosen by Config.tts_voice ("ryan" | "corn" |
+"herman"). Files in the chosen pack take precedence; missing files fall back
+to the default Ryan pack so partial packs still work.
 """
 
 import threading
@@ -42,8 +50,10 @@ def _get_assets_dir() -> Path:
 class TTSAnnouncer:
     """Plays pre-generated TTS announcements with anti-collision queue."""
 
-    def __init__(self):
+    def __init__(self, voice: str = "ryan"):
         self._assets_dir = _get_assets_dir()
+        self._voice = voice
+        self._voice_dir = self._assets_dir / "voices" / voice if voice and voice != "ryan" else None
         self._audio_cache: dict[str, object] = {}
         self._sample_rate = 16000
 
@@ -74,9 +84,17 @@ class TTSAnnouncer:
             "clipboard_enabled", "clipboard_disabled",
             "inject_enabled", "inject_disabled",
             "cleared",
+            "audio_sent", "audio_sent_waiting",
         ]
         for name in announcements:
-            wav_path = self._assets_dir / f"{name}.wav"
+            # Prefer voice-pack file, fall back to default (Ryan) top-level
+            wav_path = None
+            if self._voice_dir is not None:
+                vp = self._voice_dir / f"{name}.wav"
+                if vp.exists():
+                    wav_path = vp
+            if wav_path is None:
+                wav_path = self._assets_dir / f"{name}.wav"
             if wav_path.exists():
                 try:
                     if HAS_SIMPLEAUDIO:
@@ -140,6 +158,16 @@ class TTSAnnouncer:
                 p = pyaudio.PyAudio()
                 stream = p.open(format=pyaudio.paInt16, channels=1, rate=self._sample_rate, output=True)
                 stream.write(audio)
+                # stream.write() returns once bytes are queued, not when the
+                # PortAudio output buffer has drained. On PipeWire/ALSA the
+                # last ~150ms gets clipped if we close immediately, which
+                # truncates short prompts ("Complete." → "Qu"). Wait out the
+                # output latency (plus a small safety margin) before stopping.
+                try:
+                    latency = float(stream.get_output_latency())
+                except Exception:
+                    latency = 0.2
+                time.sleep(min(max(latency, 0.05), 0.5) + 0.05)
                 stream.stop_stream()
                 stream.close()
                 p.terminate()
@@ -175,6 +203,12 @@ class TTSAnnouncer:
 
     def announce_stopped(self):
         self._play_async("stopped")
+
+    def announce_audio_sent(self, waiting: bool = False):
+        """Played when a recording is stopped and dispatched for transcription.
+        If `waiting` (recording was long), plays the longer
+        'Audio sent. Waiting for transcription.' variant instead."""
+        self._play_async("audio_sent_waiting" if waiting else "audio_sent")
 
     def announce_paused(self):
         self._play_async("paused")
@@ -217,10 +251,21 @@ _announcer: Optional[TTSAnnouncer] = None
 _announcer_lock = threading.Lock()
 
 
-def get_announcer() -> TTSAnnouncer:
+def get_announcer(voice: str = "ryan") -> TTSAnnouncer:
+    """Return the singleton announcer. Pass `voice` on first call to choose a
+    voice pack; subsequent calls reuse the existing instance regardless of
+    `voice` (call `reset_announcer()` to swap voices at runtime)."""
     global _announcer
     if _announcer is None:
         with _announcer_lock:
             if _announcer is None:
-                _announcer = TTSAnnouncer()
+                _announcer = TTSAnnouncer(voice=voice)
     return _announcer
+
+
+def reset_announcer() -> None:
+    """Drop the cached announcer so the next get_announcer() rebuilds with a
+    fresh voice pack. Used when the user changes Config.tts_voice."""
+    global _announcer
+    with _announcer_lock:
+        _announcer = None

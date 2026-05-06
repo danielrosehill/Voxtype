@@ -275,6 +275,12 @@ HOTKEY_OPTIONS = [
 # =============================================================================
 # TRANSLATION MODE
 # =============================================================================
+TTS_VOICE_OPTIONS = [
+    ("herman", "Herman"),
+    ("corn", "Corn"),
+    ("ryan", "Ryan"),
+]
+
 TRANSLATION_LANGUAGES = [
     ("", "Off"),
     ("en", "English"),
@@ -534,6 +540,12 @@ class Config:
 
     # Audio feedback mode: "beeps" (default), "tts" (voice), "silent"
     audio_feedback_mode: str = "beeps"
+    # TTS voice pack: "ryan" (Edge en-GB, default), "corn" or "herman"
+    # (Chatterbox renders of the My-Weird-Prompts characters).
+    tts_voice: str = "herman"
+    # Threshold (seconds) above which the "Audio sent. Waiting for
+    # transcription." variant plays instead of the short "Audio sent." prompt.
+    tts_long_recording_threshold_s: float = 30.0
 
     # Hotkeys
     hotkey_toggle: str = "f13"         # Start/stop+transcribe

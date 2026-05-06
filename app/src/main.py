@@ -38,6 +38,7 @@ from .config import (
     Config, load_config, save_config, build_cleanup_prompt,
     FORMAT_PRESETS, TONE_PRESETS, MODELS, DEFAULT_MODEL, DEFAULT_BUDGET_MODEL,
     REVIEW_MODEL, REVIEW_PROMPT, HOTKEY_OPTIONS, TRANSLATION_LANGUAGES,
+    TTS_VOICE_OPTIONS,
     get_language_display_name, get_manufacturers, get_models_for_manufacturer,
     get_model_by_id, APP_VERSION,
 )
@@ -52,7 +53,7 @@ from .hotkeys import create_hotkey_listener
 from .clipboard import copy_to_clipboard
 from .vad_processor import is_vad_available
 from .audio_feedback import get_feedback
-from .tts_announcer import get_announcer
+from .tts_announcer import get_announcer, reset_announcer
 from .history import TranscriptionHistory
 from .recording_store import RecordingStore
 from .recording_history_window import RecordingHistoryWindow
@@ -458,6 +459,19 @@ class SettingsDialog(QDialog):
             self.feedback_combo.setCurrentIndex(idx)
         al.addRow("Audio feedback:", self.feedback_combo)
 
+        # Default TTS voice pack
+        self.voice_combo = QComboBox()
+        for vid, vname in TTS_VOICE_OPTIONS:
+            self.voice_combo.addItem(vname, vid)
+        idx = self.voice_combo.findData(config.tts_voice)
+        if idx >= 0:
+            self.voice_combo.setCurrentIndex(idx)
+        self.voice_combo.setToolTip(
+            "Default TTS voice pack used for announcements. Can also be "
+            "toggled on the main window."
+        )
+        al.addRow("TTS voice:", self.voice_combo)
+
         sep5 = QFrame(); sep5.setFrameShape(QFrame.Shape.HLine)
         al.addRow(sep5)
 
@@ -698,6 +712,7 @@ class SettingsDialog(QDialog):
         self.config.output_to_inject = self.out_inject.isChecked()
         self.config.auto_press_enter_after_paste = self.out_auto_enter.isChecked()
         self.config.audio_feedback_mode = self.feedback_combo.currentData()
+        self.config.tts_voice = self.voice_combo.currentData() or "ryan"
         self.config.hotkey_toggle = self.hotkey_toggle_combo.currentData()
         self.config.hotkey_tap_toggle = self.hotkey_tap_combo.currentData()
         self.config.hotkey_transcribe = self.hotkey_transcribe_combo.currentData()
@@ -1291,6 +1306,22 @@ class MainWindow(QMainWindow):
         audio_opts_strip.addWidget(self.level_meter)
         audio_opts_strip.addStretch()
 
+        # Voice picker — quick-toggle the TTS voice pack used for announcements.
+        # The default is set in Settings; this reflects/changes it on the fly.
+        audio_opts_strip.addWidget(QLabel("Voice:"))
+        self.voice_combo_main = QComboBox()
+        for vid, vname in TTS_VOICE_OPTIONS:
+            self.voice_combo_main.addItem(vname, vid)
+        idx = self.voice_combo_main.findData(self.config.tts_voice)
+        if idx >= 0:
+            self.voice_combo_main.setCurrentIndex(idx)
+        self.voice_combo_main.setToolTip(
+            "TTS announcement voice pack. Change is instant; the Settings "
+            "dialog has the same option for setting your default."
+        )
+        self.voice_combo_main.currentIndexChanged.connect(self._on_voice_changed)
+        audio_opts_strip.addWidget(self.voice_combo_main)
+
         card_layout.addLayout(audio_opts_strip)
 
         layout.addWidget(controls_card)
@@ -1772,15 +1803,16 @@ class MainWindow(QMainWindow):
     def _play_tts(self, announce_method: str):
         """Play a TTS announcement if in tts mode."""
         if self.config.audio_feedback_mode == "tts":
-            getattr(get_announcer(), announce_method)()
+            getattr(get_announcer(self.config.tts_voice), announce_method)()
 
-    def _audio_feedback(self, beep_method: str, tts_method: str):
-        """Play audio feedback based on current mode."""
+    def _audio_feedback(self, beep_method: str, tts_method: str, *tts_args, **tts_kwargs):
+        """Play audio feedback based on current mode. Extra positional/keyword
+        args are forwarded to the TTS method (no-op for beep mode)."""
         mode = self.config.audio_feedback_mode
         if mode == "beeps":
             getattr(get_feedback(), beep_method)()
         elif mode == "tts":
-            getattr(get_announcer(), tts_method)()
+            getattr(get_announcer(self.config.tts_voice), tts_method)(*tts_args, **tts_kwargs)
 
     # ── Recording controls ──
 
@@ -1840,9 +1872,14 @@ class MainWindow(QMainWindow):
         if not self.recorder.is_recording:
             return
         self._duration_timer.stop()
+        duration_s = self.recorder.get_duration()
         audio_data = self.recorder.stop_recording()
         self._rec_store.clear_active()
-        self._audio_feedback("play_stop", "announce_stopped")
+        # "Audio sent." for short recordings; the longer
+        # "Audio sent. Waiting for transcription." plays once the recording
+        # is long enough that the user is likely to wait noticeably.
+        is_long = duration_s >= self.config.tts_long_recording_threshold_s
+        self._audio_feedback("play_stop", "announce_audio_sent", waiting=is_long)
         self._reset_record_buttons()
 
         # If we have cached segments, combine them with this recording
@@ -1894,6 +1931,19 @@ class MainWindow(QMainWindow):
             self.level_meter.setVisible(True)
         elif not checked:
             self.level_meter.setVisible(False)
+
+    def _on_voice_changed(self, _idx: int):
+        """Persist the selected TTS voice and rebuild the announcer so the
+        next announcement uses the new pack."""
+        new_voice = self.voice_combo_main.currentData()
+        if not new_voice or new_voice == self.config.tts_voice:
+            return
+        self.config.tts_voice = new_voice
+        save_config(self.config)
+        reset_announcer()
+        self.status_label.setText(
+            f"Voice: {self.voice_combo_main.currentText()}"
+        )
 
     def _on_vad_toggled(self, checked: bool):
         """Persist VAD state when toggled from the main UI."""
@@ -2581,6 +2631,13 @@ class MainWindow(QMainWindow):
                 cb.blockSignals(False)
             if not self.config.show_level_meter:
                 self.level_meter.setVisible(False)
+            # Sync home-page voice picker + rebuild announcer with new pack
+            idx = self.voice_combo_main.findData(self.config.tts_voice)
+            if idx >= 0:
+                self.voice_combo_main.blockSignals(True)
+                self.voice_combo_main.setCurrentIndex(idx)
+                self.voice_combo_main.blockSignals(False)
+            reset_announcer()
 
     # ── Stats ──
 
@@ -2711,10 +2768,48 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _acquire_single_instance_lock():
+    """Take an exclusive flock on a runtime file. Returns the open fd on success,
+    or None if another instance already holds the lock. The fd is intentionally
+    kept open for process lifetime — closing it would release the lock."""
+    import fcntl
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/voxtype-{os.getuid()}"
+    try:
+        os.makedirs(runtime_dir, exist_ok=True)
+    except OSError:
+        runtime_dir = "/tmp"
+    lock_path = os.path.join(runtime_dir, "voxtype.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+    except OSError:
+        pass
+    return fd
+
+
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Voxtype")
     app.setDesktopFileName("ai-typer-v2")
+
+    lock_fd = _acquire_single_instance_lock()
+    if lock_fd is None:
+        QMessageBox.warning(
+            None,
+            "Voxtype already running",
+            "Another instance of Voxtype is already running.\n\n"
+            "Look for the microphone icon in your system tray. "
+            "Running two copies at once would cause hotkey conflicts and "
+            "duplicate transcriptions, so this instance will exit.",
+        )
+        sys.exit(0)
+    app._voxtype_lock_fd = lock_fd  # keep reference so GC doesn't close it
 
     # App icon — prefer system-installed hicolor icon, fall back to bundled asset
     icon = QIcon.fromTheme("ai-typer-v2")
