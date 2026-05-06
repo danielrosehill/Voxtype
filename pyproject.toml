@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-typer-v2"
-version = "0.6.1"
+version = "0.6.2"
 description = "Voice dictation with multimodal AI cleanup — speak naturally, get polished text"
 readme = "README.md"
 license = {text = "MIT"}

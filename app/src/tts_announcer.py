@@ -97,11 +97,22 @@ class TTSAnnouncer:
                 wav_path = self._assets_dir / f"{name}.wav"
             if wav_path.exists():
                 try:
+                    # Prepend a short pad of silence so the device-open click
+                    # from PipeWire/PulseAudio lands on silence instead of
+                    # the first phoneme. ~80 ms is enough on this stack.
+                    pad_ms = 80
+                    with wave.open(str(wav_path), 'rb') as wf:
+                        n_ch = wf.getnchannels()
+                        sw = wf.getsampwidth()
+                        sr = wf.getframerate()
+                        frames = wf.readframes(wf.getnframes())
+                    pad_frames = int(sr * pad_ms / 1000)
+                    silence = b"\x00" * (pad_frames * n_ch * sw)
+                    padded = silence + frames
                     if HAS_SIMPLEAUDIO:
-                        self._audio_cache[name] = sa.WaveObject.from_wave_file(str(wav_path))
+                        self._audio_cache[name] = sa.WaveObject(padded, n_ch, sw, sr)
                     elif HAS_PYAUDIO:
-                        with wave.open(str(wav_path), 'rb') as wf:
-                            self._audio_cache[name] = wf.readframes(wf.getnframes())
+                        self._audio_cache[name] = padded
                     else:
                         self._audio_cache[name] = None
                 except Exception:
