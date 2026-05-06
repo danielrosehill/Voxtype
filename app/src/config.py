@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 from dataclasses import dataclass, asdict
 from typing import Optional
 
